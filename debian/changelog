@@ -1,4 +1,10 @@
-prefixlimit (0.1.0) bookworm; urgency=medium
+prefixlimit (2) bookworm; urgency=medium
+
+  * Reference the correct prefix list
+
+ -- Florian Lohoff <f@zz.de>  Tue, 17 Nov 2026 23:47:07 +0100
+
+prefixlimit (1) bookworm; urgency=medium
 
   * Initial release.
 
