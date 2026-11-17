@@ -1,3 +1,9 @@
+prefixlimit (4) bookworm; urgency=medium
+
+  * Add more relaxed yaml parser
+
+ -- Florian Lohoff <f@zz.de>  Wed, 18 Nov 2026 00:15:20 +0100
+
 prefixlimit (3) bookworm; urgency=medium
 
   * Add logging on startup/reload about prefixes found
