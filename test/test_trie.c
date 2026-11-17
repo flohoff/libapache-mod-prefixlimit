@@ -105,6 +105,30 @@ static void test_yaml(void) {
   CHECK(!strcmp(c.last_cls, "default"));
   trie_free(c.t);
 
+  CHECK(parse("- { prefix: 1.2.3.0/24, class: foo }\n", &c, err) == 0);
+  CHECK(c.n == 1 && !strcmp(c.last_cls, "foo"));
+  CHECK(lookup(c.t, "1.2.3.4") == 0);
+  trie_free(c.t);
+
+  CHECK(parse("- {prefix: \"::1/128\",class: 'bar'} # c\n"
+              "- { prefix: 1.2.4.0/24 }\n"
+              "- prefix: 1.2.5.0/24\n  class: blk\n"
+              "- { class: baz, prefix: 1.2.6.0/24, }\n",
+              &c, err) == 0);
+  CHECK(c.n == 4 && !strcmp(c.last_cls, "baz"));
+  trie_free(c.t);
+
+  CHECK(parse("- { prefix: 1.2.3.0/24, class: foo\n", &c, err) == 1);
+  trie_free(c.t);
+  CHECK(parse("- { prefix: 1.2.3.0/24, bogus: x }\n", &c, err) == 1);
+  trie_free(c.t);
+  CHECK(parse("- { class: x }\n", &c, err) == 1);
+  trie_free(c.t);
+  CHECK(parse("- {}\n", &c, err) == 1);
+  trie_free(c.t);
+  CHECK(parse("- prefix: 1.2.3.0/24\n  { class: x }\n", &c, err) == 2);
+  trie_free(c.t);
+
   CHECK(parse("- class: x\n", &c, err) == 1);
   trie_free(c.t);
   CHECK(parse("- prefix: 1.2.3.0/24\n  bogus: x\n", &c, err) == 2);

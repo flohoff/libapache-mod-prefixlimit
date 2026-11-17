@@ -8,8 +8,9 @@ Apache 2.4 module: classify clients by CIDR list (YAML), rate limit by class per
   class: aicrawler
 ```
 - IPv4 and IPv6. Missing `class` = `default`.
-- Subset of YAML: list of maps with `prefix`/`class`, `#` comments, optional quotes.
-- Re-read on (graceful) restart. Parse errors abort startup with `file:line`.
+- Subset of YAML: list of maps with `prefix`/`class`, block or flow (`- { prefix: X, class: Y }`), `#` comments, optional quotes.
+- Re-read on (graceful) restart.
+- Parse errors abort startup/reload (old config keeps running) and are logged with file, line, the offending text and entries read so far.
 - Longest prefix wins.
 
 ## Config

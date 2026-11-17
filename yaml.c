@@ -70,6 +70,41 @@ static int set_key(entry_t *e, char *kv, char *err, size_t errlen) {
   return 0;
 }
 
+/* Handle "{ key: value, key: value }" (flow mapping); returns 0 ok. */
+static int set_flow(entry_t *e, char *s, char *err, size_t errlen) {
+  size_t n = strlen(s);
+  char *p, *start, q = 0;
+
+  if (n < 2 || s[n - 1] != '}')
+    return fail(err, errlen, "unterminated '{'");
+  s[n - 1] = '\0';
+  start = s + 1;
+  for (p = start;; p++) {
+    if (q) {
+      if (*p == q)
+        q = 0;
+    } else if (*p == '"' || *p == '\'') {
+      q = *p;
+    }
+    if ((!q && *p == ',') || *p == '\0') {
+      int last = *p == '\0';
+      char *e2;
+      *p = '\0';
+      while (isspace((unsigned char)*start))
+        start++;
+      for (e2 = start + strlen(start);
+           e2 > start && isspace((unsigned char)e2[-1]);)
+        *--e2 = '\0';
+      if (*start && set_key(e, start, err, errlen))
+        return 1;
+      if (last)
+        break;
+      start = p + 1;
+    }
+  }
+  return 0;
+}
+
 static int flush(entry_t *e, yaml_entry_cb cb, void *ud, char *err,
                  size_t errlen) {
   if (e->line == 0)
@@ -121,7 +156,8 @@ int yaml_parse_prefixes(const char *text, yaml_entry_cb cb, void *ud, char *err,
         return lineno;
       }
     }
-    if (set_key(&e, s, err, errlen))
+    if (line[0] == '-' && *s == '{' ? set_flow(&e, s, err, errlen)
+                                    : set_key(&e, s, err, errlen))
       return lineno;
   }
   if (flush(&e, cb, ud, err, errlen))

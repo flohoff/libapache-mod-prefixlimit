@@ -137,6 +137,17 @@ static apr_status_t trie_cleanup(void *t) {
   return APR_SUCCESS;
 }
 
+/* Line n (1-based) of buf, truncated, for error messages. */
+static const char *nth_line(apr_pool_t *p, const char *buf, int n) {
+  size_t len;
+  while (--n > 0 && (buf = strchr(buf, '\n')))
+    buf++;
+  if (!buf)
+    return "";
+  len = strcspn(buf, "\r\n");
+  return apr_pstrndup(p, buf, len > 100 ? 100 : len);
+}
+
 static const char *cmd_list(cmd_parms *cmd, void *dummy, const char *arg) {
   srv_cfg *cfg =
       ap_get_module_config(cmd->server->module_config, &prefixlimit_module);
@@ -145,21 +156,32 @@ static const char *cmd_list(cmd_parms *cmd, void *dummy, const char *arg) {
   apr_file_t *f;
   apr_finfo_t fi;
   apr_size_t len;
-  char *buf, err[256];
+  apr_status_t rv;
+  char *buf, err[256], msg[128];
   load_ctx ctx;
   int line;
   (void)dummy;
 
-  if (!path || apr_file_open(&f, path, APR_READ, APR_OS_DEFAULT, p))
-    return apr_psprintf(p, "cannot open %s", arg);
-  if (apr_file_info_get(&fi, APR_FINFO_SIZE, f)) {
+  if (!path)
+    return apr_psprintf(p, "bad path %s", arg);
+  if ((rv = apr_file_open(&f, path, APR_READ, APR_OS_DEFAULT, p))) {
+    ap_log_perror(APLOG_MARK, APLOG_ERR | APLOG_STARTUP, rv, p,
+                  "prefixlimit: cannot open prefix list %s", path);
+    return apr_psprintf(p, "cannot open %s: %s", path,
+                        apr_strerror(rv, msg, sizeof(msg)));
+  }
+  if ((rv = apr_file_info_get(&fi, APR_FINFO_SIZE, f))) {
     apr_file_close(f);
+    ap_log_perror(APLOG_MARK, APLOG_ERR | APLOG_STARTUP, rv, p,
+                  "prefixlimit: cannot stat prefix list %s", path);
     return apr_psprintf(p, "cannot stat %s", path);
   }
   len = (apr_size_t)fi.size;
   buf = apr_pcalloc(p, len + 1);
-  if (apr_file_read_full(f, buf, len, NULL)) {
+  if ((rv = apr_file_read_full(f, buf, len, NULL))) {
     apr_file_close(f);
+    ap_log_perror(APLOG_MARK, APLOG_ERR | APLOG_STARTUP, rv, p,
+                  "prefixlimit: cannot read prefix list %s", path);
     return apr_psprintf(p, "cannot read %s", path);
   }
   apr_file_close(f);
@@ -175,8 +197,13 @@ static const char *cmd_list(cmd_parms *cmd, void *dummy, const char *arg) {
   ctx.pool = p;
   ctx.n = 0;
   line = yaml_parse_prefixes(buf, on_entry, &ctx, err, sizeof(err));
-  if (line)
+  if (line) {
+    ap_log_perror(APLOG_MARK, APLOG_ERR | APLOG_STARTUP, 0, p,
+                  "prefixlimit: parsing %s failed at line %d: %s ['%s'] "
+                  "(%d prefixes read before the error)",
+                  path, line, err, nth_line(p, buf, line), ctx.n);
     return apr_psprintf(p, "%s:%d: %s", path, line, err);
+  }
   return NULL;
 }
 
