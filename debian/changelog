@@ -1,3 +1,9 @@
+prefixlimit (3) bookworm; urgency=medium
+
+  * Add logging on startup/reload about prefixes found
+
+ -- Florian Lohoff <f@zz.de>  Wed, 18 Nov 2026 00:02:07 +0100
+
 prefixlimit (2) bookworm; urgency=medium
 
   * Reference the correct prefix list
