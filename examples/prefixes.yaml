@@ -1,0 +1,7 @@
+# Example prefix list (documentation ranges)
+- prefix: 192.0.2.0/24
+  class: aicrawler
+- prefix: 198.51.100.0/24
+  class: other
+- prefix: 2001:db8::/32
+  class: aicrawler

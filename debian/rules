@@ -1,0 +1,16 @@
+#!/usr/bin/make -f
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/buildflags.mk
+
+%:
+	dh $@ --with apache2
+
+override_dh_auto_build:
+	$(MAKE) module APXS_CFLAGS="$(CFLAGS) $(CPPFLAGS) -Wall" \
+		APXS_LDFLAGS="$(LDFLAGS)"
+
+override_dh_auto_test:
+	$(MAKE) test CFLAGS_T="-Wall -Wextra -g"
+
+# Makefile install target would run apxs -i on the build host
+override_dh_auto_install:

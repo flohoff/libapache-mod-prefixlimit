@@ -1,0 +1,15 @@
+Source: prefixlimit
+Section: httpd
+Priority: optional
+Maintainer: flo <f@zz.de>
+Build-Depends: debhelper-compat (= 13), apache2-dev
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+
+Package: libapache2-mod-prefixlimit
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Apache module to rate limit client networks by URI prefix
+ mod_prefixlimit classifies clients using a YAML list of CIDR prefixes
+ (IPv4 and IPv6) and applies a token bucket rate limit per class and
+ location. Over-limit requests get 429 with a Retry-After header.
