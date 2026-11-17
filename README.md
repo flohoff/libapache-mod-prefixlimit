@@ -26,6 +26,8 @@ PrefixRateLimitStatus 429        # optional, default 429
 - One bucket per rule, shared by all clients of the class (not per prefix).
 - Inner `<Location>` rules override outer ones for the same class.
 - Over limit: 429 + `Retry-After`.
+- On start/reload the prefix count per class is logged at `notice`:
+  `LogLevel warn prefixlimit:notice`
 - Env `PREFIX_CLASS` is set for matched clients (use in logs/headers).
 - Uses the client IP seen by Apache: behind a proxy enable `mod_remoteip`.
 

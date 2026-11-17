@@ -35,7 +35,9 @@ typedef struct {
 typedef struct {
   trie_t *trie;
   apr_array_header_t *classes; /* const char * */
-  int status;                  /* 0 = unset */
+  apr_array_header_t *counts;  /* int, per class */
+  const char *path;
+  int status; /* 0 = unset */
 } srv_cfg;
 
 typedef struct {
@@ -62,6 +64,8 @@ static void *merge_srv(apr_pool_t *p, void *b, void *a) {
   srv_cfg *base = b, *add = a, *c = apr_pcalloc(p, sizeof(*c));
   c->trie = add->trie ? add->trie : base->trie;
   c->classes = add->trie ? add->classes : base->classes;
+  c->counts = add->trie ? add->counts : base->counts;
+  c->path = add->trie ? add->path : base->path;
   c->status = add->status ? add->status : base->status;
   return c;
 }
@@ -105,6 +109,7 @@ static int class_id(load_ctx *c, const char *name) {
     if (!strcmp(((const char **)c->cfg->classes->elts)[i], name))
       return i;
   *(const char **)apr_array_push(c->cfg->classes) = apr_pstrdup(c->pool, name);
+  *(int *)apr_array_push(c->cfg->counts) = 0;
   return i;
 }
 
@@ -117,10 +122,12 @@ static int on_entry(void *ud, const char *prefix, const char *cls, char *err,
     apr_snprintf(err, errlen, "bad prefix '%s'", prefix);
     return 1;
   }
-  if (trie_insert(c->cfg->trie, addr, bits, class_id(c, cls))) {
+  int id = class_id(c, cls);
+  if (trie_insert(c->cfg->trie, addr, bits, id)) {
     apr_snprintf(err, errlen, "out of memory");
     return 1;
   }
+  ((int *)c->cfg->counts->elts)[id]++;
   c->n++;
   return 0;
 }
@@ -162,15 +169,14 @@ static const char *cmd_list(cmd_parms *cmd, void *dummy, const char *arg) {
     return "out of memory";
   apr_pool_cleanup_register(p, cfg->trie, trie_cleanup, apr_pool_cleanup_null);
   cfg->classes = apr_array_make(p, 4, sizeof(const char *));
+  cfg->counts = apr_array_make(p, 4, sizeof(int));
+  cfg->path = path;
   ctx.cfg = cfg;
   ctx.pool = p;
   ctx.n = 0;
   line = yaml_parse_prefixes(buf, on_entry, &ctx, err, sizeof(err));
   if (line)
     return apr_psprintf(p, "%s:%d: %s", path, line, err);
-  ap_log_error(APLOG_MARK, APLOG_INFO, 0, cmd->server,
-               "prefixlimit: loaded %d prefixes, %d classes from %s", ctx.n,
-               cfg->classes->nelts, path);
   return NULL;
 }
 
@@ -243,11 +249,45 @@ static apr_status_t shm_cleanup(void *unused) {
   return APR_SUCCESS;
 }
 
+/* Log prefix counts per class (once per start/reload). */
+static void log_lists(server_rec *s) {
+  srv_cfg *base = ap_get_module_config(s->module_config, &prefixlimit_module);
+  server_rec *sp;
+  int i;
+
+  for (sp = s; sp; sp = sp->next) {
+    srv_cfg *c = ap_get_module_config(sp->module_config, &prefixlimit_module);
+    int total = 0;
+    if (!c->trie || (sp != s && c->trie == base->trie))
+      continue;
+    for (i = 0; i < c->classes->nelts; i++)
+      total += ((int *)c->counts->elts)[i];
+    ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, sp,
+                 "prefixlimit: %s: loaded %d prefixes in %d classes from %s",
+                 sp->server_hostname ? sp->server_hostname : "default", total,
+                 c->classes->nelts, c->path);
+    for (i = 0; i < c->classes->nelts; i++)
+      ap_log_error(APLOG_MARK, APLOG_NOTICE, 0, sp,
+                   "prefixlimit: %s: class %s: %d prefixes",
+                   sp->server_hostname ? sp->server_hostname : "default",
+                   ((const char **)c->classes->elts)[i],
+                   ((int *)c->counts->elts)[i]);
+  }
+}
+
 static int post_config(apr_pool_t *pconf, apr_pool_t *plog, apr_pool_t *ptemp,
                        server_rec *s) {
   apr_status_t rv;
+  void *first;
   (void)plog;
   (void)ptemp;
+  /* config runs twice at startup; log on the second pass and on reloads */
+  apr_pool_userdata_get(&first, "prefixlimit_post_config", s->process->pool);
+  if (first)
+    log_lists(s);
+  else
+    apr_pool_userdata_set((void *)1, "prefixlimit_post_config",
+                          apr_pool_cleanup_null, s->process->pool);
   shm = NULL;
   buckets = NULL;
   mutex = NULL;
