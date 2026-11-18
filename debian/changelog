@@ -1,3 +1,10 @@
+prefixlimit (5) bookworm; urgency=medium
+
+  * Add configurable RetryAfter and LimitMessage
+  * Add negating the class matching
+
+ -- Florian Lohoff <f@zz.de>  Wed, 18 Nov 2026 12:03:54 +0100
+
 prefixlimit (4) bookworm; urgency=medium
 
   * Add more relaxed yaml parser
