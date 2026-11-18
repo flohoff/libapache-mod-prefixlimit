@@ -16,12 +16,16 @@
 
 #include <math.h>
 #include <string.h>
+#include <strings.h>
 
 #include "trie.h"
 #include "yaml.h"
 
 #define MUTEX_TYPE "prefixlimit-shm"
 #define DEFAULT_STATUS 429
+#define HANDLER "prefixlimit-reject"
+#define NOTE_RETRY "prefixlimit-retry"
+#define DEFAULT_CTYPE "text/plain; charset=utf-8"
 
 module AP_MODULE_DECLARE_DATA prefixlimit_module;
 
@@ -42,6 +46,9 @@ typedef struct {
 
 typedef struct {
   apr_array_header_t *rules; /* rule_t */
+  int retry;                 /* Retry-After: -1 unset, 0 auto, else seconds */
+  const char *message;       /* body for the limited response, or NULL */
+  const char *ctype;
 } dir_cfg;
 
 typedef struct {
@@ -71,14 +78,19 @@ static void *merge_srv(apr_pool_t *p, void *b, void *a) {
 }
 
 static void *create_dir(apr_pool_t *p, char *path) {
+  dir_cfg *c = apr_pcalloc(p, sizeof(*c));
   (void)path;
-  return apr_pcalloc(p, sizeof(dir_cfg));
+  c->retry = -1;
+  return c;
 }
 
 static void *merge_dir(apr_pool_t *p, void *b, void *a) {
   dir_cfg *base = b, *add = a, *c = apr_pcalloc(p, sizeof(*c));
   int i, j;
   c->rules = apr_array_make(p, 2, sizeof(rule_t));
+  c->retry = add->retry >= 0 ? add->retry : base->retry;
+  c->message = add->message ? add->message : base->message;
+  c->ctype = add->message ? add->ctype : base->ctype;
   if (add->rules)
     for (i = 0; i < add->rules->nelts; i++)
       *(rule_t *)apr_array_push(c->rules) = ((rule_t *)add->rules->elts)[i];
@@ -248,6 +260,33 @@ static const char *cmd_status(cmd_parms *cmd, void *dummy, const char *arg) {
   return NULL;
 }
 
+static const char *cmd_retry(cmd_parms *cmd, void *mconfig, const char *arg) {
+  dir_cfg *dc = mconfig;
+  char *end;
+  long v;
+  (void)cmd;
+  if (!strcasecmp(arg, "auto")) {
+    dc->retry = 0;
+    return NULL;
+  }
+  v = strtol(arg, &end, 10);
+  if (end == arg || *end || v < 1 || v > 86400)
+    return "seconds (1-86400) or auto";
+  dc->retry = (int)v;
+  return NULL;
+}
+
+static const char *cmd_message(cmd_parms *cmd, void *mconfig, const char *text,
+                               const char *ctype) {
+  dir_cfg *dc = mconfig;
+  (void)cmd;
+  if (!*text)
+    return "message must not be empty";
+  dc->message = apr_pstrdup(cmd->pool, text);
+  dc->ctype = ctype ? apr_pstrdup(cmd->pool, ctype) : DEFAULT_CTYPE;
+  return NULL;
+}
+
 static const command_rec cmds[] = {
     AP_INIT_TAKE1("PrefixListFile", cmd_list, NULL, RSRC_CONF,
                   "YAML file with prefix/class entries"),
@@ -255,6 +294,12 @@ static const command_rec cmds[] = {
                    "<class> <rate>/<s|m> [burst=N]"),
     AP_INIT_TAKE1("PrefixRateLimitStatus", cmd_status, NULL, RSRC_CONF,
                   "status code when limited (default 429)"),
+    AP_INIT_TAKE1("PrefixRateLimitRetryAfter", cmd_retry, NULL,
+                  RSRC_CONF | ACCESS_CONF,
+                  "Retry-After seconds when limited, or auto (default)"),
+    AP_INIT_TAKE12("PrefixRateLimitMessage", cmd_message, NULL,
+                   RSRC_CONF | ACCESS_CONF,
+                   "<text> [content-type] body sent with the limited response"),
     {NULL}};
 
 /* ---- shared state ---- */
@@ -406,14 +451,45 @@ static int check_access(request_rec *r) {
       continue;
     wait = take(rule);
     if (wait) {
-      apr_table_setn(r->err_headers_out, "Retry-After",
-                     apr_itoa(r->pool, wait));
+      const char *retry = apr_itoa(r->pool, dc->retry > 0 ? dc->retry : wait);
       ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,
                     "prefixlimit: class %s over limit", cls);
+      if (dc->message) {
+        /* answered by reject_handler, set in fixups */
+        apr_table_setn(r->notes, NOTE_RETRY, retry);
+        return DECLINED;
+      }
+      apr_table_setn(r->err_headers_out, "Retry-After", retry);
       return sc->status ? sc->status : DEFAULT_STATUS;
     }
   }
   return DECLINED;
+}
+
+/* Route limited requests to reject_handler, whatever other modules chose. */
+static int fixups(request_rec *r) {
+  if (apr_table_get(r->notes, NOTE_RETRY))
+    r->handler = HANDLER;
+  return DECLINED;
+}
+
+static int reject_handler(request_rec *r) {
+  srv_cfg *sc =
+      ap_get_module_config(r->server->module_config, &prefixlimit_module);
+  dir_cfg *dc = ap_get_module_config(r->per_dir_config, &prefixlimit_module);
+  const char *retry = apr_table_get(r->notes, NOTE_RETRY);
+  const char *body;
+
+  if (!r->handler || strcmp(r->handler, HANDLER) || !retry || !dc->message)
+    return DECLINED;
+  body = apr_pstrcat(r->pool, dc->message, "\n", NULL);
+  r->status = sc->status ? sc->status : DEFAULT_STATUS;
+  ap_set_content_type(r, dc->ctype ? dc->ctype : DEFAULT_CTYPE);
+  apr_table_setn(r->headers_out, "Retry-After", retry);
+  ap_set_content_length(r, (apr_off_t)strlen(body));
+  if (!r->header_only)
+    ap_rputs(body, r);
+  return OK;
 }
 
 static void register_hooks(apr_pool_t *p) {
@@ -422,6 +498,8 @@ static void register_hooks(apr_pool_t *p) {
   ap_hook_post_config(post_config, NULL, NULL, APR_HOOK_MIDDLE);
   ap_hook_child_init(child_init, NULL, NULL, APR_HOOK_MIDDLE);
   ap_hook_access_checker(check_access, NULL, NULL, APR_HOOK_MIDDLE);
+  ap_hook_fixups(fixups, NULL, NULL, APR_HOOK_REALLY_LAST);
+  ap_hook_handler(reject_handler, NULL, NULL, APR_HOOK_REALLY_FIRST);
 }
 
 AP_DECLARE_MODULE(prefixlimit) = {

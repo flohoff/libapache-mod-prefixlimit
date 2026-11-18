@@ -17,9 +17,10 @@ codes() { # n curl-args...
 }
 
 rm -rf "$ROOT"
-mkdir -p "$ROOT"/{logs,run,htdocs/limited,htdocs/open}
+mkdir -p "$ROOT"/{logs,run,htdocs/limited,htdocs/open,htdocs/msg,htdocs/fixed,htdocs/custom}
 echo hi > "$ROOT/htdocs/limited/x.txt"
 echo hi > "$ROOT/htdocs/open/x.txt"
+for d in msg fixed custom; do echo hi > "$ROOT/htdocs/$d/x.txt"; done
 cat > "$ROOT/prefixes-test.yaml" <<EOF
 - prefix: 127.0.0.0/8
   class: testcls
@@ -59,6 +60,28 @@ check "no class unlisted" "$(curl -sI -H 'X-Forwarded-For: 8.8.8.8' $URL/open/x.
 # separate bucket per class: aicrawler 1/m burst=1
 out=$(codes 4 -H 'X-Forwarded-For: 1.92.5.5' $URL/limited/x.txt)
 check "aicrawler 1 ok then 429" "$out" "1 200 3 429"
+
+# message body + configurable Retry-After
+check "msg first ok" "$(code $URL/msg/x.txt)" 200
+resp=$(curl -s -D- $URL/msg/x.txt)
+check "msg status" "$(echo "$resp" | perl -ne 'print $1 if /^HTTP\S* (\d+)/')" 429
+check "msg content-type" "$(echo "$resp" | perl -ne 'print $1 if /^Content-Type: (.*?)\r?$/i')" "text/plain; charset=utf-8"
+check "msg Retry-After fixed" "$(echo "$resp" | perl -ne 'print $1 if /^Retry-After: (\d+)/i')" 30
+check "msg body" "$(echo "$resp" | perl -0ne 'print $1 if /\r?\n\r?\n(.*?)\s*$/s')" "Slow down, try later"
+check "msg filters ran (X-Class)" "$(echo "$resp" | perl -ne 'print $1 if /^X-Class: (\S+)/i')" testcls
+check "msg HEAD status" "$(curl -sI -o /dev/null -w '%{http_code}' $URL/msg/x.txt)" 429
+check "msg other loc unaffected" "$(code $URL/open/x.txt)" 200
+
+check "fixed first ok" "$(code $URL/fixed/x.txt)" 200
+resp=$(curl -s -D- $URL/fixed/x.txt)
+check "fixed status" "$(echo "$resp" | perl -ne 'print $1 if /^HTTP\S* (\d+)/')" 429
+check "fixed Retry-After" "$(echo "$resp" | perl -ne 'print $1 if /^Retry-After: (\d+)/i')" 17
+echo "$resp" | perl -0ne 'exit(/text\/html/i ? 0 : 1)' && ok "fixed default error page (html)" || bad "fixed default error page"
+
+check "custom first ok" "$(code $URL/custom/x.txt)" 200
+resp=$(curl -s -D- $URL/custom/x.txt)
+check "custom content-type" "$(echo "$resp" | perl -ne 'print $1 if /^Content-Type: (.*?)\r?$/i')" "application/json"
+check "custom body" "$(echo "$resp" | perl -0ne 'print $1 if /\r?\n\r?\n(.*?)\s*$/s')" '{"error":"slow down"}'
 
 # ipv6
 sleep 1.2
