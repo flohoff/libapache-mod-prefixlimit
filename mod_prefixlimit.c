@@ -31,6 +31,7 @@ module AP_MODULE_DECLARE_DATA prefixlimit_module;
 
 typedef struct {
   const char *cls;
+  int neg;     /* rule applies to clients NOT in cls */
   int id;      /* bucket index */
   double rate; /* tokens per second */
   double burst;
@@ -99,7 +100,8 @@ static void *merge_dir(apr_pool_t *p, void *b, void *a) {
       rule_t *r = &((rule_t *)base->rules->elts)[i];
       int dup = 0;
       for (j = 0; add->rules && j < add->rules->nelts; j++)
-        if (!strcmp(r->cls, ((rule_t *)add->rules->elts)[j].cls))
+        if (r->neg == ((rule_t *)add->rules->elts)[j].neg &&
+            !strcmp(r->cls, ((rule_t *)add->rules->elts)[j].cls))
           dup = 1;
       if (!dup)
         *(rule_t *)apr_array_push(c->rules) = *r;
@@ -227,16 +229,24 @@ static const char *cmd_rate(cmd_parms *cmd, void *mconfig, const char *cls,
   rule_t *r;
   char *end;
   double n = strtod(rate, &end), per = 1;
+  int neg = 0;
 
   if (end == rate || n <= 0 || *end != '/' ||
       (end[1] != 's' && end[1] != 'm') || end[2])
     return "rate must be <number>/s or <number>/m";
   if (end[1] == 'm')
     per = 60;
+  if (cls[0] == '!') {
+    neg = 1;
+    cls++;
+  }
+  if (!*cls || *cls == '!')
+    return "class name must not be empty or start with '!'";
   if (!dc->rules)
     dc->rules = apr_array_make(cmd->pool, 2, sizeof(rule_t));
   r = apr_array_push(dc->rules);
   r->cls = apr_pstrdup(cmd->pool, cls);
+  r->neg = neg;
   r->id = nrules++;
   r->rate = n / per;
   r->burst = r->rate < 1 ? 1 : ceil(r->rate);
@@ -437,23 +447,23 @@ static int check_access(request_rec *r) {
     return DECLINED;
   }
   id = trie_lookup(sc->trie, a);
-  if (id < 0)
-    return DECLINED;
-  cls = ((const char **)sc->classes->elts)[id];
-  apr_table_setn(r->subprocess_env, "PREFIX_CLASS", cls);
+  cls = id < 0 ? NULL : ((const char **)sc->classes->elts)[id];
+  if (cls)
+    apr_table_setn(r->subprocess_env, "PREFIX_CLASS", cls);
 
   if (!dc->rules || !buckets)
     return DECLINED;
   for (i = 0; i < dc->rules->nelts; i++) {
     const rule_t *rule = &((rule_t *)dc->rules->elts)[i];
-    int wait;
-    if (strcmp(rule->cls, cls))
+    int wait, match = cls && !strcmp(rule->cls, cls);
+    if (match == rule->neg)
       continue;
     wait = take(rule);
     if (wait) {
       const char *retry = apr_itoa(r->pool, dc->retry > 0 ? dc->retry : wait);
       ap_log_rerror(APLOG_MARK, APLOG_INFO, 0, r,
-                    "prefixlimit: class %s over limit", cls);
+                    "prefixlimit: rule %s%s over limit (client class %s)",
+                    rule->neg ? "!" : "", rule->cls, cls ? cls : "none");
       if (dc->message) {
         /* answered by reject_handler, set in fixups */
         apr_table_setn(r->notes, NOTE_RETRY, retry);

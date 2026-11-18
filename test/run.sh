@@ -17,10 +17,10 @@ codes() { # n curl-args...
 }
 
 rm -rf "$ROOT"
-mkdir -p "$ROOT"/{logs,run,htdocs/limited,htdocs/open,htdocs/msg,htdocs/fixed,htdocs/custom}
+mkdir -p "$ROOT"/{logs,run,htdocs/limited,htdocs/open,htdocs/msg,htdocs/fixed,htdocs/custom,htdocs/neg}
 echo hi > "$ROOT/htdocs/limited/x.txt"
 echo hi > "$ROOT/htdocs/open/x.txt"
-for d in msg fixed custom; do echo hi > "$ROOT/htdocs/$d/x.txt"; done
+for d in msg fixed custom neg; do echo hi > "$ROOT/htdocs/$d/x.txt"; done
 cat > "$ROOT/prefixes-test.yaml" <<EOF
 - prefix: 127.0.0.0/8
   class: testcls
@@ -82,6 +82,14 @@ check "custom first ok" "$(code $URL/custom/x.txt)" 200
 resp=$(curl -s -D- $URL/custom/x.txt)
 check "custom content-type" "$(echo "$resp" | perl -ne 'print $1 if /^Content-Type: (.*?)\r?$/i')" "application/json"
 check "custom body" "$(echo "$resp" | perl -0ne 'print $1 if /\r?\n\r?\n(.*?)\s*$/s')" '{"error":"slow down"}'
+
+# negated class: !aicrawler = everyone else, incl. unlisted
+check "neg: aicrawler exempt" "$(codes 10 -H 'X-Forwarded-For: 1.92.5.5' $URL/neg/x.txt)" "10 200"
+sleep 1.2
+check "neg: other class limited" "$(codes 4 $URL/neg/x.txt)" "1 200 3 429"
+sleep 1.2
+check "neg: unlisted limited" "$(codes 4 -H 'X-Forwarded-For: 8.8.8.8' $URL/neg/x.txt)" "1 200 3 429"
+sleep 1.2
 
 # ipv6
 sleep 1.2

@@ -27,6 +27,8 @@ PrefixRateLimitStatus 429        # optional, default 429
 ```
 - `PrefixRateLimit <class> <n>/<s|m> [burst=N]`: token bucket, burst default = ceil(rate).
 - One bucket per rule, shared by all clients of the class (not per prefix).
+- `!class` negates: the rule applies to every client NOT in that class, including clients not in the list. They share one bucket.
+  E.g. `PrefixRateLimit !aicrawler 10/s` limits everyone except crawlers. Needs a `PrefixListFile`.
 - Inner `<Location>` rules override outer ones for the same class.
 - Over limit: 429 + `Retry-After` (seconds until a token is free).
 - `PrefixRateLimitRetryAfter <seconds|auto>`: fixed `Retry-After` value instead of the computed one. Per `<Location>`, inherited. The value is only advertised, not enforced.
